@@ -1,0 +1,17 @@
+#!/bin/sh
+
+./ses 4455 &
+ses_pid=$!
+
+socat - TCP:localhost:4455 << EOF
+the quick brown fox
+EOF
+
+
+socat - TCP:localhost:4455 << EOF
+quit
+EOF
+
+killall ses
+
+
