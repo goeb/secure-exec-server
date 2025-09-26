@@ -1,19 +1,15 @@
-
 /*
- * Compile with:
- * gcc -o g_server_tcp g_server_tcp.c $(pkg-config --cflags --libs gio-2.0)
+ * Copyright (C) 2025 Frederic Hoerni
  *
- * Execution:
- * terminal-1> ./g_server_tcp 4455
- * Server listening on TCP port 4455
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
- * terminal-2> socat - TCP:localhost:4455
- * hello
- *
- * terminal-1>
- * new client connected: 0
- * 0: recv: hello
- * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <arpa/inet.h>
@@ -23,28 +19,22 @@
 #include <string.h>
 #include <sys/socket.h>
 
+#include "ses_crypto.h"
+#include "ses_utils.h"
+
 int usage()
 {
-	g_print("usage: g_server_tcp TCP-PORT\n");
+    g_print("usage: ses TCP-PORT PEM-CERTIFICATE\n");
 	return 1;
 }
 
-void info(char *format, ...)
-{
-	va_list args;
-	va_start(args, format);
-	vfprintf(stderr, format, args);
-	va_end(args);
-	
-	fprintf(stderr, "\n");
-}
-
 typedef struct {
 	GMainLoop *mainloop;
+    EVP_PKEY *public_key;
 } general_context_t;
 
 typedef struct {
-	GMainLoop *mainloop;
+    general_context_t *general_context;
 	int client_identifier;
 	guint8 *bytes_received;
 	size_t bytes_received_len;
@@ -52,7 +42,7 @@ typedef struct {
 
 /* Extend the buffer of received bytes and store the new bytes
  */
-void store(connection_context_t *ctx, guint8 *data, size_t len)
+static void store(connection_context_t *ctx, guint8 *data, size_t len)
 {
 	// on first call, ctx->bytes_received is NULL, and g_realloc allocates
 	ctx->bytes_received = g_realloc(ctx->bytes_received, ctx->bytes_received_len + len);
@@ -100,13 +90,23 @@ gboolean receive_data(gint fd, GIOCondition condition, gpointer user_data)
 
 	return G_SOURCE_CONTINUE; // continue listening on this fd
 close_fd:
+    close(fd);
 	if (0 == strncmp((char*)ctx->bytes_received, "shutdown\n", 9)) {
 		info("%d: shutdown requested", client_id);
-		g_main_loop_quit(ctx->mainloop);
+        g_main_loop_quit(ctx->general_context->mainloop);
 		// not very clean shutdown as resources used by other connections
 		// are not properly freed.
-	}
-	close(fd);
+    } else {
+        GError *error = NULL;
+        int err = authenticate_script(ctx->bytes_received, ctx->bytes_received_len, ctx->general_context->public_key, &error);
+        if (err) {
+            info("%d: authentication FAILED: %s", client_id, error->message);
+            g_error_free(error);
+        } else {
+            info("%d: authentication OK", client_id);
+            // start the script
+        }
+    }
 	g_free(ctx->bytes_received);
 	g_free(ctx);
 	return G_SOURCE_REMOVE; // stop monitoring this fd
@@ -121,7 +121,7 @@ close_fd:
 gboolean accept_incoming_connection(gint fd, GIOCondition condition, gpointer user_data)
 {
 	static int next_client_id = 0;
-	general_context_t *gctx = (general_context_t*)user_data;
+    general_context_t *general_context = (general_context_t*)user_data;
 
 	int client_fd = accept(fd, NULL, NULL);
 	if (client_fd < 0) {
@@ -131,7 +131,7 @@ gboolean accept_incoming_connection(gint fd, GIOCondition condition, gpointer us
 	
 	// allocate a client id for this connection
 	connection_context_t *ctx = g_new0(connection_context_t, 1);
-	ctx->mainloop = gctx->mainloop;
+    ctx->general_context = general_context;
 	ctx->client_identifier = next_client_id;
 	next_client_id++;
 
@@ -185,9 +185,11 @@ int create_listening_socket(uint16_t port)
 
 int main(int argc, char **argv)
 {
-	if (argc != 2) return usage();
+    if (argc != 3) return usage();
 
-	guint16 port = strtoul(argv[1], NULL, 10); // errors not handled
+    uint16_t port = strtoul(argv[1], NULL, 10); // errors not handled
+    EVP_PKEY *pubkey = load_public_key(argv[2]);
+    if (!pubkey) return 1;
 
 	int listen_fd = create_listening_socket(port);
 	if (listen_fd < 0) return 1;
@@ -196,6 +198,7 @@ int main(int argc, char **argv)
 
 	general_context_t ctx;
 	ctx.mainloop = g_main_loop_new(NULL, FALSE);
+    ctx.public_key = pubkey;
 
 	g_unix_fd_add(listen_fd, G_IO_IN, accept_incoming_connection, (gpointer)&ctx);
 

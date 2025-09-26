@@ -2,8 +2,12 @@
 
 set -e  # stop on first error
 
-./ses 4455 &
+T=$(basename $0)
+SRCDIR=$(dirname $0)
+
+./ses 4455 $SRCDIR/test.cert &
 pid=$!
+sleep 1  # allow time for the server to start
 
 socat - TCP:localhost:4455 << EOF
 the quick brown fox

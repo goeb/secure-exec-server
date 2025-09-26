@@ -1,0 +1,32 @@
+#!/bin/sh
+
+# In case a previous test did not shutdown the daemon
+echo shutdown | socat - TCP:localhost:4455
+T=$(basename $0)
+SRCDIR=$(dirname $0)
+
+set -e  # stop on first error
+
+./ses 4455 $SRCDIR/test.cert 2>&1 | tee $T.log &
+pid=$!
+sleep 1  # allow time for the server to start
+
+cat << EOF > $T.script
+echo "Script of test $T starting..."
+echo "Script of test $T completed."
+EOF
+
+# Signing
+openssl dgst -sha256 -sign $SRCDIR/test.key -hex $T.script | sed -e "s/.*= */# /" > $T.script.sig
+
+# Sending to the server
+cat $T.script.sig $T.script | socat - TCP:localhost:4455
+grep "0: authentication OK" $T.log >/dev/null
+
+# Sending a modified script
+(cat $T.script.sig $T.script; echo xx) | socat - TCP:localhost:4455
+grep "1: authentication FAILED: verification failed" $T.log >/dev/null 
+
+echo shutdown | socat - TCP:localhost:4455
+
+wait $pid
