@@ -1,0 +1,10 @@
+#!/bin/sh
+
+set -e  # stop on first error
+
+./ses 4455 &
+pid=$!
+
+echo shutdown | socat - TCP:localhost:4455
+
+wait $pid

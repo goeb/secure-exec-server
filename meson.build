@@ -8,5 +8,5 @@ exe = executable('ses',
                  dependencies: dep_glib,
                  install : true)
 
-test('basic', find_program('test/test1'))
-
+test('basic', find_program('test/test_basic'), is_parallel : false)
+test('shutdown', find_program('test/test_shutdown'), is_parallel : false)

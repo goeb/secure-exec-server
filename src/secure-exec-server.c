@@ -20,6 +20,7 @@
 #include <errno.h>
 #include <glib-unix.h>
 #include <stdio.h>
+#include <string.h>
 #include <sys/socket.h>
 
 int usage()
@@ -39,12 +40,35 @@ void info(char *format, ...)
 }
 
 typedef struct {
+	GMainLoop *mainloop;
+} general_context_t;
+
+typedef struct {
+	GMainLoop *mainloop;
 	int client_identifier;
 	guint8 *bytes_received;
 	size_t bytes_received_len;
 } connection_context_t;
 
+/* Extend the buffer of received bytes and store the new bytes
+ */
+void store(connection_context_t *ctx, guint8 *data, size_t len)
+{
+	// on first call, ctx->bytes_received is NULL, and g_realloc allocates
+	ctx->bytes_received = g_realloc(ctx->bytes_received, ctx->bytes_received_len + len);
+	memcpy(ctx->bytes_received + ctx->bytes_received_len, data, len);
+	ctx->bytes_received_len += len;
+}
 
+/* Callback in charge of receiving bytes on the socket
+ * @param fd          file descriptor of the socket
+ * @param condition
+ * @param user_data   connection context
+ *
+ * When bytes are received they are stored in a dedicated buffer.
+ * When the connection is closed, if "shutdown\n" has been received
+ * then it triggers the shutdown of the server.
+ */
 gboolean receive_data(gint fd, GIOCondition condition, gpointer user_data)
 {
 	connection_context_t *ctx = (connection_context_t*)user_data;
@@ -62,6 +86,7 @@ gboolean receive_data(gint fd, GIOCondition condition, gpointer user_data)
 		} else if (n > 0) {
 			buffer[n] = 0;
 			info("%d: recv: %s", client_id, buffer); // assume printable characters only
+			store(ctx, buffer, n);
 		}
 	}
 	if (condition & G_IO_HUP) {
@@ -75,14 +100,28 @@ gboolean receive_data(gint fd, GIOCondition condition, gpointer user_data)
 
 	return G_SOURCE_CONTINUE; // continue listening on this fd
 close_fd:
+	if (0 == strncmp((char*)ctx->bytes_received, "shutdown\n", 9)) {
+		info("%d: shutdown requested", client_id);
+		g_main_loop_quit(ctx->mainloop);
+		// not very clean shutdown as resources used by other connections
+		// are not properly freed.
+	}
 	close(fd);
+	g_free(ctx->bytes_received);
 	g_free(ctx);
 	return G_SOURCE_REMOVE; // stop monitoring this fd
 }
 
+
+/* Callback in charge of accepting a new incoming connection
+ * @param fd          file descriptor of the listening socket
+ * @param condition   not used (should always be G_IO_IN)
+ * @param user_data   general context
+ */
 gboolean accept_incoming_connection(gint fd, GIOCondition condition, gpointer user_data)
 {
 	static int next_client_id = 0;
+	general_context_t *gctx = (general_context_t*)user_data;
 
 	int client_fd = accept(fd, NULL, NULL);
 	if (client_fd < 0) {
@@ -92,6 +131,7 @@ gboolean accept_incoming_connection(gint fd, GIOCondition condition, gpointer us
 	
 	// allocate a client id for this connection
 	connection_context_t *ctx = g_new0(connection_context_t, 1);
+	ctx->mainloop = gctx->mainloop;
 	ctx->client_identifier = next_client_id;
 	next_client_id++;
 
@@ -102,6 +142,8 @@ gboolean accept_incoming_connection(gint fd, GIOCondition condition, gpointer us
 	return G_SOURCE_CONTINUE; // continue listening
 }
 
+/* Create a listening socket
+ */
 int create_listening_socket(uint16_t port)
 {
 	int err;
@@ -152,13 +194,16 @@ int main(int argc, char **argv)
 
 	info("Server listening on TCP port %u", port);
 
-	GMainLoop *loop;
-	loop = g_main_loop_new(NULL, FALSE);
-	g_unix_fd_add(listen_fd, G_IO_IN, accept_incoming_connection, NULL);
-	g_main_loop_run(loop);
+	general_context_t ctx;
+	ctx.mainloop = g_main_loop_new(NULL, FALSE);
 
-	g_main_loop_unref(loop);
+	g_unix_fd_add(listen_fd, G_IO_IN, accept_incoming_connection, (gpointer)&ctx);
+
+	g_main_loop_run(ctx.mainloop);
+
+	g_main_loop_unref(ctx.mainloop);
 	close(listen_fd);
 
+	info("exiting");
 	return 0;
 }

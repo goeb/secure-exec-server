@@ -38,6 +38,10 @@ EOF
 socat - TCP:localhost:4455 << EOF
 ```
 
-
+- As a client, you can shutdown the server as follows:
+```
+echo shutdown | socat - TCP:localhost:4455
+```
+This will immediately disconnect all connected clients and make the server stop.
 
 

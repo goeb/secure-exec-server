@@ -1,0 +1,14 @@
+#!/bin/sh
+
+set -e  # stop on first error
+
+./ses 4455 &
+pid=$!
+
+socat - TCP:localhost:4455 << EOF
+the quick brown fox
+EOF
+
+echo shutdown | socat - TCP:localhost:4455
+
+wait $pid
