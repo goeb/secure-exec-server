@@ -1,0 +1,8 @@
+# 304402207334be088000a17ae7b39a7d0abeeaf6a1148e1a6e12cbef222dc666c2a21e5f022064d196a55ba3100053b14eff39d38023c1144ffc1f6e37cddb17dce449ab7b52
+t0=$(awk '{print $1}' /proc/uptime)
+echo "Script starting..."
+echo "this is printed on stderr" >&2
+echo "sleeping 1 s..."
+sleep 1
+delta_t=$(awk -v t0=$t0 '{print $1 - t0}' /proc/uptime)
+echo "Script completed ($delta_t s)"

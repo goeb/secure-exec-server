@@ -4,16 +4,6 @@
 
 #include "ses_utils.h"
 
-void info(char *format, ...)
-{
-    va_list args;
-    va_start(args, format);
-    vfprintf(stderr, format, args);
-    va_end(args);
-
-    fprintf(stderr, "\n");
-}
-
 void hexdump(char *label, uint8_t *data, size_t len)
 {
     fprintf(stderr, "%s: ", label);

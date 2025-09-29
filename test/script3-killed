@@ -1,0 +1,4 @@
+# 3045022100efe2b149bef8223cbb996b30991d42a70b051a1d08dade6209ba4da7c61be1b202207a231b70aa4dcdd17bc26ef3420d0149e78e633d0fc0a4e10ef0e6978cd1c8be
+echo kill -KILL myself
+kill -KILL $$
+sleep 1

@@ -11,24 +11,21 @@ set -e  # stop on first error
 pid=$!
 sleep 1  # allow time for the server to start
 
+# Test various invalid signature lines
 echo "" | socat - TCP:localhost:4455
-grep "0: authentication FAILED: too short" $T.log >/dev/null
-
 echo "#" | socat - TCP:localhost:4455
-grep "1: authentication FAILED: verification failed" $T.log >/dev/null
-
 echo "x" | socat - TCP:localhost:4455
-grep "2: authentication FAILED: missing # on first line" $T.log >/dev/null
-
 echo "# " | socat - TCP:localhost:4455
-grep "3: authentication FAILED: verification failed" $T.log >/dev/null
-
 echo "# 3x" | socat - TCP:localhost:4455
-grep "4: authentication FAILED: cannot get valid signature: -3" $T.log >/dev/null
-
 echo "# 3ef" | socat - TCP:localhost:4455
-grep "5: authentication FAILED: cannot get valid signature: -1" $T.log >/dev/null
 
 echo shutdown | socat - TCP:localhost:4455
+
+grep "0: authentication FAILED: too short" $T.log >/dev/null
+grep "1: authentication FAILED: verification failed" $T.log >/dev/null
+grep "2: authentication FAILED: missing # on first line" $T.log >/dev/null
+grep "3: authentication FAILED: verification failed" $T.log >/dev/null
+grep "4: authentication FAILED: cannot get valid signature: -3" $T.log >/dev/null
+grep "5: authentication FAILED: cannot get valid signature: -1" $T.log >/dev/null
 
 wait $pid
