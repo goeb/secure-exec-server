@@ -1,7 +1,1 @@
-t0=$(awk '{print $1}' /proc/uptime)
-echo "Script starting..."
-echo "this is printed on stderr" >&2
-echo "sleeping 1 s..."
-sleep 1
-delta_t=$(awk -v t0=$t0 '{print $1 - t0}' /proc/uptime)
-echo "Script completed ($delta_t s)"
+echo "the quick brown fox"

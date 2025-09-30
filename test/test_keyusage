@@ -1,0 +1,19 @@
+#!/bin/sh
+
+T=$(basename $0)
+SRCDIR=$(dirname $0)
+
+# create a key and certificate without keyusage
+openssl ecparam -name prime256v1 -genkey -out $T.key
+openssl req -x509 -key $T.key -out $T.cert1 -subj "/CN=$T.cert1/" -days 3650
+
+./ses 4455 $T.cert1
+[ $? -eq 1 ] || exit 1
+
+# create a certificate keyusage other than digitalSignature
+openssl req -x509 -key $T.key -out $T.cert2 -subj "/CN=$T.cert2/" -days 3650 -addext keyUsage=dataEncipherment
+
+./ses 4455 $T.cert2
+[ $? -eq 1 ] || exit 1
+
+exit 0

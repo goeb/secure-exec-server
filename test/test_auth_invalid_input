@@ -9,7 +9,7 @@ set -e  # stop on first error
 
 ./ses 4455 $SRCDIR/test.cert 2>&1 | tee $T.log &
 pid=$!
-sleep 1  # allow time for the server to start
+sleep 0.5  # allow time for the server to start
 
 # Test various invalid signature lines
 echo "" | socat - TCP:localhost:4455

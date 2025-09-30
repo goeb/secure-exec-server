@@ -7,7 +7,7 @@ SRCDIR=$(dirname $0)
 
 ./ses 4455 $SRCDIR/test.cert &
 pid=$!
-sleep 1  # allow time for the server to start
+sleep 0.5  # allow time for the server to start
 
 echo shutdown | socat - TCP:localhost:4455
 
