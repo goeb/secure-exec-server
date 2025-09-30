@@ -137,26 +137,45 @@ static uint8_t *get_signature_from_first_line(uint8_t *script, size_t len, uint8
  *
  * @param script
  * @param len
- * @param public_key
+ * @param public_keys       List of available public keys
+ * @apram[out] filename     The return location of the filename that authenticates
+ *                          the script. The data is taken from the matching element
+ *                          in public_keys.
+ * @param[out] error        The return location for error description.
+ *
  * @return 0 if authentication is ok
  *         -1 if authentication failed
+ *
  * The first line of the script must contain the signature in the format:
  * "#" <spaces> <hexadecimal dump> "\n"
  * The payload is everything that follows and is verified.
  */
-int authenticate_script(uint8_t *script, size_t len, EVP_PKEY *public_key, GError **error)
+int authenticate_script(uint8_t *script, size_t len, GArray *public_keys, const gchar **filename, GError **error)
 {
 	uint8_t signature[SIG_SIZE_MAX];
 	size_t signature_len;
 	uint8_t *payload_start = get_signature_from_first_line(script, len, signature, SIG_SIZE_MAX, &signature_len, error);
 	if (!payload_start) return -1;
+	int err = -1; // failed
 
 	size_t payload_len = len - (payload_start - script);
-	int err = verify(payload_start, payload_len, public_key, signature, signature_len);
-	if (err) {
-		g_set_error(error, SES_CRYPTO_ERROR, SES_CRYPTO_ERROR_AUTHENTICATION_FAILED, "verification failed");
+
+	// try all public keys in a row
+	guint size = public_keys->len;
+	for (guint i=0; i < size; i++) {
+		public_key_t *pubkey_struct = g_array_index(public_keys, public_key_t*, i);
+		EVP_PKEY *public_key = pubkey_struct->public_key;
+		err = verify(payload_start, payload_len, public_key, signature, signature_len);
+		if (!err) {
+			// authentication success
+			*filename = pubkey_struct->filename;
+			return 0;
+		}
+		// try next public key in list
 	}
 
-	return err;
+	g_set_error(error, SES_CRYPTO_ERROR, SES_CRYPTO_ERROR_AUTHENTICATION_FAILED, "verification failed");
+
+	return -1;
 }
 

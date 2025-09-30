@@ -24,18 +24,15 @@ Test:
 ```
 meson test
 ...
-1/5 basic                     OK              0.54s
-2/5 shutdown                  OK              0.51s
-3/5 auth_invalid_input        OK              0.53s
-4/5 auth_signature            OK              0.57s
-5/5 keyusage                  OK              0.03s
-
-Ok:                 5   
-Expected Fail:      0   
-Fail:               0   
-Unexpected Pass:    0   
-Skipped:            0   
-Timeout:            0   
+1/8 basic                     OK              0.54s
+2/8 shutdown                  OK              0.51s
+3/8 auth_invalid_input        OK              0.53s
+4/8 auth_signature            OK              0.57s
+5/8 keyusage                  OK              0.03s
+6/8 child_process             OK              2.54s
+7/8 child_parallel            OK              2.58s
+8/8 certificates              OK              0.55s
+...
 ```
 
 Install
@@ -45,10 +42,11 @@ meson install --destdir installdir
 
 The Secure Exec Server binary gets installed in: `installdir/usr/bin/ses`
 
+
 ## Usage
 
 ```
-usage: ses TCP-PORT CERTIFICATE
+usage: ses TCP-PORT CERTIFICATE ...
 
 Start a TCP server where clients can submit their scripts, that get
 authenticated and executed.
@@ -57,6 +55,8 @@ Arguments:
   CERTIFICATE  X509 certificate whose public key is used for authentication.
                It must be in PEM encoding.
                It must carry the x509v3 extension KeyUsage 'digitalSignature'.
+               If several certificates are specified, the authentication
+               will succeed if at least 1 certificate verifies the signature.
   TCP-PORT     Listening port
 ```
 
@@ -75,6 +75,7 @@ You can also use RSA keys.
 Start a server that loads the public key and listens on `TCP-PORT`:
 ```
 $ ses 4455 test.cert
+Pulic key loaded from test.cert
 Server listening on TCP port 4455
 ```
 
@@ -110,11 +111,11 @@ On the server side, we get something like:
 Server listening on TCP port 4455
 0: new client connected
 0: disconnected
-0: authentication OK
-0: bash script started (pid=4909)
+0: authentication OK by test.cert
+0: bash script started (pid=4208)
 0: all bytes sent to child's stdin
 0: output: the quick brown fox
-0: child terminated (pid=4909) ok
+0: child terminated (pid=4208) ok
 1: new client connected
 1: disconnected
 1: shutdown requested
@@ -149,3 +150,7 @@ The first line of the script must have the following format:
 
 All following bytes are the payload, and taken into account for computing the signature.
 
+
+## License
+
+GPLv2. See [LICENSE](LICENSE).

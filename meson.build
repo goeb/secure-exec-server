@@ -18,3 +18,4 @@ test('auth_signature', find_program('test/test_auth_signature'), is_parallel: fa
 test('keyusage', find_program('test/test_keyusage'), is_parallel: false)
 test('child_process', find_program('test/test_child_process'), is_parallel: false)
 test('child_parallel', find_program('test/test_child_parallel'), is_parallel: false)
+test('certificates', find_program('test/test_certificates'), is_parallel: false)

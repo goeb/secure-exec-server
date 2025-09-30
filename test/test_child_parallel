@@ -11,9 +11,11 @@ set -e  # stop on first error
 pid=$!
 sleep 0.5  # allow time for the server to start
 
+t0=$(awk '{print $1}' /proc/uptime)
+
 # Sending to the server
 for i in $(seq 10); do
-	cat $SRCDIR/script2-1s | socat - TCP:localhost:4455
+	cat $SRCDIR/script2-sleep-1s | socat - TCP:localhost:4455
 done
 
 # By sleeping 2 s, we check that all scripts have been executed in parallel
@@ -22,6 +24,9 @@ sleep 2
 echo shutdown | socat - TCP:localhost:4455
 
 wait $pid
+
+delta_t=$(awk -v t0=$t0 '{print $1 - t0}' /proc/uptime)
+echo "Duration: $delta_t s"
 
 # Check
 for i in $(seq 0 9); do

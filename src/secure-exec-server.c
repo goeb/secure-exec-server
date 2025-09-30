@@ -24,15 +24,17 @@
 
 int usage()
 {
-	g_print("usage: ses TCP-PORT CERTIFICATE\n"
+	g_print("usage: ses TCP-PORT CERTIFICATE ...\n"
 	        "\n"
 	        "Start a TCP server where clients can submit their scripts, that get\n"
-            "authenticated and executed.\n"
+	           "authenticated and executed.\n"
 	        "\n"
 	        "Arguments:\n"
 	        "  CERTIFICATE  X509 certificate whose public key is used for authentication.\n"
 	        "               It must be in PEM encoding.\n"
 	        "               It must carry the x509v3 extension KeyUsage 'digitalSignature'.\n"
+	        "               If several certificates are specified, the authentication\n"
+	        "               will succeed if at least 1 certificate verifies the signature.\n"
 	        "  TCP-PORT     Listening port\n"
 	        );
 
@@ -41,7 +43,7 @@ int usage()
 
 typedef struct {
 	GMainLoop *mainloop;
-	EVP_PKEY *public_key;
+	GArray *public_keys; // null-terminated list of public keys
 } general_context_t;
 
 typedef struct {
@@ -80,13 +82,13 @@ gboolean feed_stdin(gint fd, GIOCondition condition, gpointer user_data)
 		ctx->script_ptr += n;
 		ctx->script_len -= n;
 		if (ctx->script_len == 0) {
-            INFO("%d: all bytes sent to child's stdin", ctx->client_identifier);
+			INFO("%d: all bytes sent to child's stdin", ctx->client_identifier);
 			goto end;
 		}
 	}
 	if (condition & G_IO_ERR) {
 		// happens when previous writings were blocked, then the child process exited.
-        INFO("%d: feed_stdin: G_IO_ERR", ctx->client_identifier);
+		INFO("%d: feed_stdin: G_IO_ERR", ctx->client_identifier);
 		goto end;
 	}
 	if (!(condition & G_IO_OUT) && !(condition & G_IO_ERR)) {
@@ -106,9 +108,9 @@ void watch_pid(GPid pid, gint wait_status, gpointer user_data)
 	GError *error = NULL;
 	gboolean is_success = g_spawn_check_wait_status(wait_status, &error);
 	if (is_success) {
-        INFO("%d: child terminated (pid=%d) ok", ctx->client_identifier, pid);
+		INFO("%d: child terminated (pid=%d) ok", ctx->client_identifier, pid);
 	} else {
-        INFO("%d: child terminated (pid=%d) error: %s", ctx->client_identifier, pid, error->message);
+		INFO("%d: child terminated (pid=%d) error: %s", ctx->client_identifier, pid, error->message);
 		g_error_free(error);
 	}
 	g_free(ctx->bytes_received);
@@ -124,7 +126,7 @@ void execute_script(connection_context_t *ctx)
 	char command_with_label[100];
 
 	// Prefix all output lines of the bash script with the client identifier
-    snprintf(command_with_label, 100, "bash 2>&1 | sed -e 's/^/%d: output: /'", ctx->client_identifier);
+	snprintf(command_with_label, 100, "bash 2>&1 | sed -e 's/^/%d: output: /'", ctx->client_identifier);
 	gchar *command[] = {"bash", "-o", "pipefail", "-c", command_with_label, NULL};
 	gboolean is_ok = g_spawn_async_with_pipes(NULL, command, NULL,
 	                                          G_SPAWN_DO_NOT_REAP_CHILD | G_SPAWN_SEARCH_PATH,
@@ -135,8 +137,8 @@ void execute_script(connection_context_t *ctx)
 		INFO("%d: g_spawn_async_with_pipes error: %s\n", ctx->client_identifier, error->message);
 		g_error_free(error);
 	} else {
-        INFO("%d: bash script started (pid=%d)", ctx->client_identifier, pid);
-        g_unix_fd_add(fd_stdin, G_IO_OUT|G_IO_PRI|G_IO_ERR|G_IO_HUP, feed_stdin, (gpointer)ctx);
+		INFO("%d: bash script started (pid=%d)", ctx->client_identifier, pid);
+		g_unix_fd_add(fd_stdin, G_IO_OUT|G_IO_PRI|G_IO_ERR|G_IO_HUP, feed_stdin, (gpointer)ctx);
 		g_child_watch_add(pid, watch_pid, (gpointer)ctx);
 	}
 }
@@ -159,8 +161,8 @@ gboolean receive_data(gint fd, GIOCondition condition, gpointer user_data)
 		ssize_t n;
 		n = read(fd, buffer, sizeof(buffer)-1);
 		if (n == 0) {
-            // connection closed by peer
-            INFO("%d: disconnected", client_id);
+			// connection closed by peer
+			INFO("%d: disconnected", client_id);
 			goto close_fd;
 		} else if (n < 1) {
 			INFO("%d: read error: %s", client_id, g_strerror(errno));
@@ -186,16 +188,17 @@ close_fd:
 	if (0 == strncmp((char*)ctx->bytes_received, "shutdown\n", 9)) {
 		INFO("%d: shutdown requested", client_id);
 		g_main_loop_quit(ctx->general_context->mainloop);
-        // not very clean shutdown as resources used by other connections
-        // are not properly freed, and possible child processes running.
+		// not very clean shutdown as resources used by other connections
+		// are not properly freed, and possible child processes running.
 	} else {
 		GError *error = NULL;
-		int err = authenticate_script(ctx->bytes_received, ctx->bytes_received_len, ctx->general_context->public_key, &error);
+		const gchar *filename;
+		int err = authenticate_script(ctx->bytes_received, ctx->bytes_received_len, ctx->general_context->public_keys, &filename, &error);
 		if (err) {
 			INFO("%d: authentication FAILED: %s", client_id, error->message);
 			g_error_free(error);
 		} else {
-			INFO("%d: authentication OK", client_id);
+			INFO("%d: authentication OK by %s", client_id, filename);
 			// start the script
 			ctx->script_ptr = ctx->bytes_received; // the signature line can be executed as it is comment
 			ctx->script_len = ctx->bytes_received_len;
@@ -231,7 +234,7 @@ gboolean accept_incoming_connection(gint fd, GIOCondition condition, gpointer us
 	ctx->client_identifier = next_client_id;
 	next_client_id++;
 
-    INFO("%d: new client connected", ctx->client_identifier);
+	INFO("%d: new client connected", ctx->client_identifier);
 
 	g_unix_fd_add(client_fd, G_IO_IN|G_IO_PRI|G_IO_ERR|G_IO_HUP, receive_data, (gpointer)ctx);
 
@@ -281,12 +284,26 @@ int create_listening_socket(uint16_t port)
 
 int main(int argc, char **argv)
 {
-	if (argc != 3) return usage();
+	if (argc < 3) return usage();
 
 	uint16_t port = strtoul(argv[1], NULL, 10); // errors not handled
 
-	EVP_PKEY *pubkey = load_public_key(argv[2]);
-	if (!pubkey) return 1;
+	GArray* public_keys = g_array_new(TRUE, TRUE, sizeof(public_key_t*));
+	for (int i=2; i<argc; i++) {
+		char *filename = argv[i];
+		EVP_PKEY *pubkey = load_public_key(filename);
+		if (!pubkey) continue;
+		// we have a valid public key
+		public_key_t *pubkey_struct = g_new0(public_key_t, 1);
+		pubkey_struct->public_key = pubkey;
+		pubkey_struct->filename = filename;
+		g_array_append_val(public_keys, pubkey_struct);
+		fprintf(stderr, "Pulic key loaded from %s\n", filename);
+	}
+	if (public_keys->len == 0) {
+		fprintf(stderr, "No valid pulic key found\n");
+		return 1;
+	}
 
 	int listen_fd = create_listening_socket(port);
 	if (listen_fd < 0) return 1;
@@ -299,7 +316,7 @@ int main(int argc, char **argv)
 	// Prepare the main event loop
 	general_context_t ctx;
 	ctx.mainloop = g_main_loop_new(NULL, FALSE);
-	ctx.public_key = pubkey;
+	ctx.public_keys = public_keys;
 
 	g_unix_fd_add(listen_fd, G_IO_IN, accept_incoming_connection, (gpointer)&ctx);
 
@@ -308,8 +325,17 @@ int main(int argc, char **argv)
 
 	// Clean up
 	g_main_loop_unref(ctx.mainloop);
-	EVP_PKEY_free(pubkey);
 	close(listen_fd);
+
+	// Free all public keys
+	guint size = public_keys->len;
+	for (guint i=0; i < size; i++) {
+		public_key_t *pubkey_struct = g_array_index(public_keys, public_key_t*, i);
+		EVP_PKEY_free(pubkey_struct->public_key);
+		// Do not free the filename as it comes from the command line arguments
+		g_free(pubkey_struct);
+	}
+	g_array_free(public_keys, TRUE);
 
 	INFO("exiting");
 	return 0;

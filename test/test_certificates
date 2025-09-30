@@ -1,0 +1,42 @@
+#!/bin/sh
+
+# In case a previous test did not shutdown the daemon
+echo shutdown | socat - TCP:localhost:4455
+T=$(basename $0)
+SRCDIR=$(dirname $0)
+
+# Prepare bad certificates
+touch fake1.cert
+openssl ecparam -name prime256v1 -genkey -out other.key
+openssl req -x509 -key other.key -out other.cert -subj "/CN=other/" -addext keyUsage=cRLSign
+
+# Error case: the daemon should not start
+./ses 4455 fake1.cert other.cert
+[ $? -eq 1 ] || exit 1
+
+set -e  # stop on first error
+
+# Case with one valid certificate at the end of the list
+./ses 4455 fake1.cert other.cert $SRCDIR/test.cert 2>&1 | tee $T.log &
+pid=$!
+sleep 0.5  # allow time for the server to start
+
+cat << EOF > $T.script
+echo "hello"
+EOF
+
+# Signing with other.key and sending (should lead to auth error)
+openssl dgst -sha256 -sign other.key -hex $T.script | sed -e "s/.*= */# /" > $T.script.sig
+cat $T.script.sig $T.script | socat - TCP:localhost:4455
+
+# Signing with test.key and sending (should lead to auth ok)
+openssl dgst -sha256 -sign $SRCDIR/test.key -hex $T.script | sed -e "s/.*= */# /" > $T.script.sig
+cat $T.script.sig $T.script | socat - TCP:localhost:4455
+
+echo shutdown | socat - TCP:localhost:4455
+wait $pid
+
+# Check
+grep "0: authentication FAILED: verification failed" $T.log >/dev/null
+grep "1: authentication OK" $T.log >/dev/null
+

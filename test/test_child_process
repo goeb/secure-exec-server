@@ -13,7 +13,7 @@ sleep 0.5  # allow time for the server to start
 
 # Sending to the server
 cat $SRCDIR/script1-exit | socat - TCP:localhost:4455
-cat $SRCDIR/script2-1s | socat - TCP:localhost:4455
+cat $SRCDIR/script2-sleep-1s | socat - TCP:localhost:4455
 cat $SRCDIR/script3-killed | socat - TCP:localhost:4455
 
 sleep 2
