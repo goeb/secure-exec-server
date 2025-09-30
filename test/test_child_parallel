@@ -1,0 +1,30 @@
+#!/bin/sh
+
+# In case a previous test did not shutdown the daemon
+echo shutdown | socat - TCP:localhost:4455
+T=$(basename $0)
+SRCDIR=$(dirname $0)
+
+set -e  # stop on first error
+
+./ses 4455 $SRCDIR/test.cert 2>&1 | tee $T.log &
+pid=$!
+sleep 0.5  # allow time for the server to start
+
+# Sending to the server
+for i in $(seq 10); do
+	cat $SRCDIR/script2-1s | socat - TCP:localhost:4455
+done
+
+# By sleeping 2 s, we check that all scripts have been executed in parallel
+# (otherwise it would have taken at least 10 s)
+sleep 2
+echo shutdown | socat - TCP:localhost:4455
+
+wait $pid
+
+# Check
+for i in $(seq 0 9); do
+	grep "$i: output: Script completed" $T.log >/dev/null
+done
+
