@@ -9,8 +9,9 @@
 #include "ses_crypto.h"
 #include "ses_utils.h"
 
-#define SIG_SIZE_MAX 4096 // max size of the hex dump of the signature
+#define SIG_SIZE_MAX 4096 // max size of the DER-encoded signature
 
+// Configure error domain and codes for glib GError
 GQuark ses_crypto_error_quark (void);
 #define SES_CRYPTO_ERROR (ses_crypto_error_quark ())
 G_DEFINE_QUARK(ses-crypto-quark, ses_crypto_error)
@@ -19,7 +20,10 @@ enum {
 	SES_CRYPTO_ERROR_AUTHENTICATION_FAILED
 };
 
-int verify(const uint8_t *msg, size_t msg_len, EVP_PKEY *pubkey, uint8_t *sig, size_t sig_len)
+/*
+ * Verify a message against a public key and a signature
+ */
+static int verify(const uint8_t *msg, size_t msg_len, EVP_PKEY *pubkey, uint8_t *sig, size_t sig_len)
 {
 	int ret = -1; // failure by default
 
@@ -42,9 +46,10 @@ error:
 	return ret;
 }
 
-/* Get the public key of X509 certificate (PEM)
+/*
+ * Get the public key of X509 certificate
  *
- * @param path   Path of the input file (PEM)
+ * @param path   Path of the input file (PEM encoded)
  *
  * @return pointer to public key or NULL on error
  *         The caller of the function takes ownership of the data
@@ -54,7 +59,7 @@ EVP_PKEY *load_public_key(const char *path)
 {
 	FILE *certfile = NULL;
 	X509 *x509cert = NULL;
-	EVP_PKEY *pubkey = NULL; // return value
+	EVP_PKEY *pubkey = NULL; // default return value
 
 	certfile = fopen(path, "r");
 	if (!certfile) {
@@ -69,7 +74,7 @@ EVP_PKEY *load_public_key(const char *path)
 		goto end;
 	}
 
-	// Check if key usage is digital signature
+	// Check if key usage is digitalSignature
 	uint32_t key_usage = X509_get_key_usage(x509cert);
 	if (UINT32_MAX == key_usage) {
 		fprintf(stderr, "Missing key usage. Ignoring certificate: %s\n", path);
@@ -97,31 +102,38 @@ static uint8_t *get_signature_from_first_line(uint8_t *script, size_t len, uint8
 		g_set_error(error, SES_CRYPTO_ERROR, SES_CRYPTO_ERROR_INVALID_INPUT, "too short");
 		return NULL;
 	}
+
 	uint8_t *ptr = script;
-	// get the signature
+
 	if (*ptr != '#') {
-		g_set_error(error, SES_CRYPTO_ERROR, SES_CRYPTO_ERROR_INVALID_INPUT, "missing # on first line");
+		g_set_error(error, SES_CRYPTO_ERROR, SES_CRYPTO_ERROR_INVALID_INPUT, "missing '#' as first character");
 		return NULL;
 	}
 	ptr++; len--;
-	// skip SPACE characters
+
+	// Skip SPACE characters
 	while (len > 0 && *ptr == ' ') {
-		ptr++; len--;
+		ptr++;
+		len--;
 	}
 	if (len == 0) {
 		g_set_error(error, SES_CRYPTO_ERROR, SES_CRYPTO_ERROR_INVALID_INPUT, "missing signature line");
 		return NULL;
 	}
+
 	uint8_t *sig_start = ptr;
-	// get the first '\n' that marks the end of the first line
+
+	// Get the first '\n' that marks the end of the first line
 	while (len > 0 && *ptr != '\n') {
-		ptr++; len--;
+		ptr++;
+		len--;
 	}
 
 	if (len == 0) {
 		g_set_error(error, SES_CRYPTO_ERROR, SES_CRYPTO_ERROR_INVALID_INPUT, "missing LF character at end of signature line");
 		return NULL;
 	}
+
 	size_t sig_len = ptr - sig_start;
 
 	int n = unhexlify((char*)sig_start, sig_len, signature, signature_size);
@@ -133,22 +145,23 @@ static uint8_t *get_signature_from_first_line(uint8_t *script, size_t len, uint8
 	ptr++; // skip past the '\n'
 	return ptr;
 }
+
 /* Authenticate a script
  *
  * @param script
  * @param len
  * @param public_keys       List of available public keys
  * @apram[out] filename     The return location of the filename that authenticates
- *                          the script. The data is taken from the matching element
+ *                          the script. It points to the matching element
  *                          in public_keys.
  * @param[out] error        The return location for error description.
  *
- * @return 0 if authentication is ok
+ * @return 0 if authentication is ok by at least one of the public keys
  *         -1 if authentication failed
  *
  * The first line of the script must contain the signature in the format:
- * "#" <spaces> <hexadecimal dump> "\n"
- * The payload is everything that follows and is verified.
+ *   "#" <spaces> <hexadecimal dump> "\n"
+ * The payload is everything that follows, and is verified.
  */
 int authenticate_script(uint8_t *script, size_t len, GArray *public_keys, const gchar **filename, GError **error)
 {
@@ -156,26 +169,24 @@ int authenticate_script(uint8_t *script, size_t len, GArray *public_keys, const 
 	size_t signature_len;
 	uint8_t *payload_start = get_signature_from_first_line(script, len, signature, SIG_SIZE_MAX, &signature_len, error);
 	if (!payload_start) return -1;
-	int err = -1; // failed
 
 	size_t payload_len = len - (payload_start - script);
 
-	// try all public keys in a row
+	// Try all public keys in a row
 	guint size = public_keys->len;
-	for (guint i=0; i < size; i++) {
-		public_key_t *pubkey_struct = g_array_index(public_keys, public_key_t*, i);
+	for (guint idx=0; idx < size; idx++) {
+		public_key_t *pubkey_struct = g_array_index(public_keys, public_key_t*, idx);
 		EVP_PKEY *public_key = pubkey_struct->public_key;
-		err = verify(payload_start, payload_len, public_key, signature, signature_len);
+		int err = verify(payload_start, payload_len, public_key, signature, signature_len);
 		if (!err) {
-			// authentication success
+			// Authentication success
 			*filename = pubkey_struct->filename;
 			return 0;
 		}
-		// try next public key in list
+		// Else, try next public key in list
 	}
 
 	g_set_error(error, SES_CRYPTO_ERROR, SES_CRYPTO_ERROR_AUTHENTICATION_FAILED, "verification failed");
 
 	return -1;
 }
-

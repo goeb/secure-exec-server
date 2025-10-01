@@ -1,4 +1,5 @@
 #!/bin/sh
+# Test a very basic example
 
 set -e  # stop on first error
 

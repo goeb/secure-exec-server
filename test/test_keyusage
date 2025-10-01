@@ -1,4 +1,5 @@
 #!/bin/sh
+# Test certificate with bad key usage
 
 T=$(basename $0)
 SRCDIR=$(dirname $0)

@@ -1,4 +1,5 @@
 #!/bin/sh
+# Test executing various scripts
 
 # In case a previous test did not shutdown the daemon
 echo shutdown | socat - TCP:localhost:4455
@@ -26,4 +27,3 @@ grep "0: child terminated .* error: Child process exited with code 1" $T.log >/d
 grep "1: output: this is printed on stderr" $T.log >/dev/null
 grep "1: output: Script completed" $T.log >/dev/null
 grep "2: child terminated .* error: Child process exited with code 137" $T.log >/dev/null
-

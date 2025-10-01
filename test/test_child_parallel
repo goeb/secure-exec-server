@@ -1,4 +1,5 @@
 #!/bin/sh
+# Test handling 10 requests in parallel
 
 # In case a previous test did not shutdown the daemon
 echo shutdown | socat - TCP:localhost:4455
@@ -21,6 +22,7 @@ done
 # By sleeping 2 s, we check that all scripts have been executed in parallel
 # (otherwise it would have taken at least 10 s)
 sleep 2
+
 echo shutdown | socat - TCP:localhost:4455
 
 wait $pid
@@ -32,4 +34,3 @@ echo "Duration: $delta_t s"
 for i in $(seq 0 9); do
 	grep "$i: output: Script completed" $T.log >/dev/null
 done
-

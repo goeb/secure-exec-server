@@ -4,13 +4,6 @@
 
 #include "ses_utils.h"
 
-void hexdump(char *label, uint8_t *data, size_t len)
-{
-	fprintf(stderr, "%s: ", label);
-	for (size_t i=0; i<len; i++) fprintf(stderr, "%02x", data[i]);
-	fprintf(stderr, "\n");
-}
-
 /**
  * Convert a hexadecimal dump to a binary
  * @param ascii_hex       a string of characters [a-fA-F0-9]
@@ -23,9 +16,9 @@ void hexdump(char *label, uint8_t *data, size_t len)
  *             -2 binary_size less then ascii_hex_len/2
  *             -3 ascii_hex contains invalid characters
  * Examples:
- * "0123456"  -> -1
- * "21f_4f"   -> -3
- * "012345aF" -> 4, binary="\x01\x23\x45\xaf"
+ *   "0123456"  -> -1
+ *   "21f_4f"   -> -3
+ *   "012345aF" -> 4, binary="\x01\x23\x45\xaf"
  */
 int unhexlify(const char *ascii_hex, size_t ascii_hex_len, uint8_t *binary, size_t binary_size)
 {

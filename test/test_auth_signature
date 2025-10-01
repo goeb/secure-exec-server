@@ -1,4 +1,5 @@
 #!/bin/sh
+# Test correct and incorrect signatures
 
 # In case a previous test did not shutdown the daemon
 echo shutdown | socat - TCP:localhost:4455
@@ -27,8 +28,8 @@ cat $T.script.sig $T.script | socat - TCP:localhost:4455
 
 echo shutdown | socat - TCP:localhost:4455
 
+wait $pid
+
 # Check
 grep "0: authentication OK" $T.log >/dev/null
 grep "1: authentication FAILED: verification failed" $T.log >/dev/null
-
-wait $pid

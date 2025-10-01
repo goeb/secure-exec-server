@@ -27,7 +27,7 @@ int usage()
 	g_print("usage: ses TCP-PORT CERTIFICATE ...\n"
 	        "\n"
 	        "Start a TCP server where clients can submit their scripts, that get\n"
-	           "authenticated and executed.\n"
+	        "authenticated and executed.\n"
 	        "\n"
 	        "Arguments:\n"
 	        "  CERTIFICATE  X509 certificate whose public key is used for authentication.\n"
@@ -43,16 +43,17 @@ int usage()
 
 typedef struct {
 	GMainLoop *mainloop;
-	GArray *public_keys; // null-terminated list of public keys
+	GArray *public_keys; // list of valid public keys
 } general_context_t;
 
 typedef struct {
 	general_context_t *general_context;
 	int client_identifier;
-	uint8_t *bytes_received;
+	uint8_t *bytes_received; // received from the client
 	size_t bytes_received_len;
-	uint8_t *script_ptr; // pointer inside the allocated buffer pointed by bytes_received
-	size_t script_len;
+	uint8_t *script_ptr; /* pointer inside the allocated buffer pointed by bytes_received
+	                      * used to keep track of bytes sent to the child process */
+	size_t script_len; // length of script_ptr
 } connection_context_t;
 
 /* Extend the buffer of received bytes and store the new bytes
@@ -65,7 +66,13 @@ static void store(connection_context_t *ctx, uint8_t *data, size_t len)
 	ctx->bytes_received_len += len;
 }
 
-gboolean feed_stdin(gint fd, GIOCondition condition, gpointer user_data)
+/*
+ * Send bytes to the stdin of a child process
+ *
+ * This callback may be called several times for the same
+ * fd and child process.
+ */
+static gboolean feed_stdin(gint fd, GIOCondition condition, gpointer user_data)
 {
 	connection_context_t *ctx = (connection_context_t*)user_data;
 	DEBUG("%d: feed_stdin: condition=0x%x", ctx->client_identifier, condition);
@@ -79,6 +86,7 @@ gboolean feed_stdin(gint fd, GIOCondition condition, gpointer user_data)
 			INFO("%d: feed_stdin: errno=%d", ctx->client_identifier, errno);
 			goto end;
 		}
+		// Keep track of what remains to be sent
 		ctx->script_ptr += n;
 		ctx->script_len -= n;
 		if (ctx->script_len == 0) {
@@ -87,7 +95,7 @@ gboolean feed_stdin(gint fd, GIOCondition condition, gpointer user_data)
 		}
 	}
 	if (condition & G_IO_ERR) {
-		// happens when previous writings were blocked, then the child process exited.
+		// Happens when previous writings made the pipe full and the child process exited
 		INFO("%d: feed_stdin: G_IO_ERR", ctx->client_identifier);
 		goto end;
 	}
@@ -98,11 +106,14 @@ gboolean feed_stdin(gint fd, GIOCondition condition, gpointer user_data)
 	
 	return G_SOURCE_CONTINUE;
 end:
-   	close(fd);
-   	return G_SOURCE_REMOVE;
+	close(fd);
+	return G_SOURCE_REMOVE;
 }
 
-void watch_pid(GPid pid, gint wait_status, gpointer user_data)
+/*
+ * Free resources after child exit
+ */
+static void watch_pid(GPid pid, gint wait_status, gpointer user_data)
 {
 	connection_context_t *ctx = (connection_context_t *)user_data;
 	GError *error = NULL;
@@ -118,12 +129,18 @@ void watch_pid(GPid pid, gint wait_status, gpointer user_data)
 	g_spawn_close_pid(pid);
 }
 
-void execute_script(connection_context_t *ctx)
+/*
+ * Start a bash process that will execute the script
+ *
+ * The script will be sent to the child's stdin, in a separate callback.
+ * The output of the process (stdout and stderr) are merged into the server's stdout.
+ */
+static void execute_script(connection_context_t *ctx)
 {
 	GError *error = NULL;
 	gint fd_stdin;
 	GPid pid;
-	char command_with_label[100];
+	char command_with_label[100]; // should be enough, see below
 
 	// Prefix all output lines of the bash script with the client identifier
 	snprintf(command_with_label, 100, "bash 2>&1 | sed -e 's/^/%d: output: /'", ctx->client_identifier);
@@ -138,30 +155,34 @@ void execute_script(connection_context_t *ctx)
 		g_error_free(error);
 	} else {
 		INFO("%d: bash script started (pid=%d)", ctx->client_identifier, pid);
+		// Register callbacks on the child's stdin and termination
 		g_unix_fd_add(fd_stdin, G_IO_OUT|G_IO_PRI|G_IO_ERR|G_IO_HUP, feed_stdin, (gpointer)ctx);
 		g_child_watch_add(pid, watch_pid, (gpointer)ctx);
 	}
 }
 
-/* Callback in charge of receiving bytes on the socket
- * @param fd          file descriptor of the socket
- * @param condition
- * @param user_data   connection context
+/*
+ * Receive bytes from a client
  *
  * When bytes are received they are stored in a dedicated buffer.
- * When the connection is closed, if "shutdown\n" has been received
+ * When the connection is closed and "shutdown\n" has been received
  * then it triggers the shutdown of the server.
+ *
+ * This callback may be called several times for the same client.
  */
-gboolean receive_data(gint fd, GIOCondition condition, gpointer user_data)
+static gboolean receive_data(gint fd, GIOCondition condition, gpointer user_data)
 {
 	connection_context_t *ctx = (connection_context_t*)user_data;
 	int client_id = ctx->client_identifier;
 	if (condition & G_IO_IN) {
-		uint8_t buffer[10];
+		// In a real project, you will be more efficient with a larger buffer size
+		// (for example 4096 instead of 60).
+		// We also reserve 1 byte for adding a trailing null character, for debugging.
+		uint8_t buffer[60];
 		ssize_t n;
 		n = read(fd, buffer, sizeof(buffer)-1);
 		if (n == 0) {
-			// connection closed by peer
+			// Connection closed by peer
 			INFO("%d: disconnected", client_id);
 			goto close_fd;
 		} else if (n < 1) {
@@ -185,10 +206,13 @@ gboolean receive_data(gint fd, GIOCondition condition, gpointer user_data)
 	return G_SOURCE_CONTINUE; // continue listening on this fd
 close_fd:
 	close(fd);
-	if (0 == strncmp((char*)ctx->bytes_received, "shutdown\n", 9)) {
+	INFO("%d: number of bytes received: %lu", client_id, ctx->bytes_received_len);
+	if (!ctx->bytes_received) {
+		// No byte received
+	} else if ( (ctx->bytes_received_len == 9) && (0 == strncmp((char*)ctx->bytes_received, "shutdown\n", 9)) ) {
 		INFO("%d: shutdown requested", client_id);
 		g_main_loop_quit(ctx->general_context->mainloop);
-		// not very clean shutdown as resources used by other connections
+		// Not very clean shutdown as resources used by other connections
 		// are not properly freed, and possible child processes running.
 	} else {
 		GError *error = NULL;
@@ -204,7 +228,7 @@ close_fd:
 			ctx->script_len = ctx->bytes_received_len;
 			execute_script(ctx);
 			return G_SOURCE_REMOVE; // stop monitoring this fd
-	   }
+		}
 	}
 	g_free(ctx->bytes_received);
 	g_free(ctx);
@@ -212,15 +236,20 @@ close_fd:
 }
 
 
-/* Callback in charge of accepting a new incoming connection
+/*
+ * Accept a new client
  * @param fd          file descriptor of the listening socket
- * @param condition   not used (should always be G_IO_IN)
+ * @param condition   should always be G_IO_IN
  * @param user_data   general context
  */
-gboolean accept_incoming_connection(gint fd, GIOCondition condition, gpointer user_data)
+static gboolean accept_incoming_connection(gint fd, GIOCondition condition, gpointer user_data)
 {
-	static int next_client_id = 0;
+	static int next_client_id = 0; // used to allocate identifiers of new clients
 	general_context_t *general_context = (general_context_t*)user_data;
+
+	if (condition != G_IO_IN) {
+		INFO("accept_incoming_connection: unexpected condition 0x%x", condition);
+	}
 
 	int client_fd = accept(fd, NULL, NULL);
 	if (client_fd < 0) {
@@ -228,25 +257,27 @@ gboolean accept_incoming_connection(gint fd, GIOCondition condition, gpointer us
 		return G_SOURCE_CONTINUE; // continue listening
 	}
 
-	// allocate a client id for this connection
+	// Allocate a client id for this connection
 	connection_context_t *ctx = g_new0(connection_context_t, 1);
 	ctx->general_context = general_context;
 	ctx->client_identifier = next_client_id;
-	next_client_id++;
+	next_client_id++; // overflow not handled
 
 	INFO("%d: new client connected", ctx->client_identifier);
 
+	// Register a callback to handle the connection
 	g_unix_fd_add(client_fd, G_IO_IN|G_IO_PRI|G_IO_ERR|G_IO_HUP, receive_data, (gpointer)ctx);
 
 	return G_SOURCE_CONTINUE; // continue listening
 }
 
-/* Create a listening socket
+/*
+ * Create a listening socket
  */
-int create_listening_socket(uint16_t port)
+static int create_listening_socket(uint16_t port)
 {
 	int err;
-	const int max_queue = 5;
+	const int max_queue = 5; // arbitrary choice
 
 	int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
 	if (listen_fd < 0) {
@@ -279,6 +310,7 @@ int create_listening_socket(uint16_t port)
 		close(listen_fd);
 		return -1;
 	}
+
 	return listen_fd;
 }
 
@@ -289,19 +321,21 @@ int main(int argc, char **argv)
 	uint16_t port = strtoul(argv[1], NULL, 10); // errors not handled
 
 	GArray* public_keys = g_array_new(TRUE, TRUE, sizeof(public_key_t*));
+
 	for (int i=2; i<argc; i++) {
 		char *filename = argv[i];
 		EVP_PKEY *pubkey = load_public_key(filename);
-		if (!pubkey) continue;
-		// we have a valid public key
+		if (!pubkey) continue; // public key not valid, ignore
+
+		// This is a valid public key, append it to the list
 		public_key_t *pubkey_struct = g_new0(public_key_t, 1);
 		pubkey_struct->public_key = pubkey;
 		pubkey_struct->filename = filename;
 		g_array_append_val(public_keys, pubkey_struct);
-		fprintf(stderr, "Pulic key loaded from %s\n", filename);
+		fprintf(stderr, "Public key loaded from %s\n", filename);
 	}
 	if (public_keys->len == 0) {
-		fprintf(stderr, "No valid pulic key found\n");
+		fprintf(stderr, "No valid public key found\n");
 		return 1;
 	}
 
@@ -318,6 +352,7 @@ int main(int argc, char **argv)
 	ctx.mainloop = g_main_loop_new(NULL, FALSE);
 	ctx.public_keys = public_keys;
 
+	// Register a callback to accept incoming connections
 	g_unix_fd_add(listen_fd, G_IO_IN, accept_incoming_connection, (gpointer)&ctx);
 
 	// Start the main event loop

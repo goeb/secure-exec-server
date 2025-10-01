@@ -1,4 +1,5 @@
 #!/bin/sh
+# Test combination of valid and invalid certificates
 
 # In case a previous test did not shutdown the daemon
 echo shutdown | socat - TCP:localhost:4455
@@ -34,6 +35,7 @@ openssl dgst -sha256 -sign $SRCDIR/test.key -hex $T.script | sed -e "s/.*= */# /
 cat $T.script.sig $T.script | socat - TCP:localhost:4455
 
 echo shutdown | socat - TCP:localhost:4455
+
 wait $pid
 
 # Check

@@ -60,6 +60,11 @@ Arguments:
   TCP-PORT     Listening port
 ```
 
+Exit status:
+
+- 0 when the server is shutdown by a client request
+- 1 on error (listen error, no certificate with 'digitalSignature', ...)
+
 
 ## Quick start
 
@@ -99,6 +104,14 @@ $ openssl dgst -sha256 -sign test.key -hex example-script \
 $ cat example-script.sig example-script | socat - TCP:localhost:4455
 ```
 
+- Test sending a script with an invalid signature:
+```
+$ socat - TCP:localhost:4455 << EOF
+# 0123456789ABCDEF
+echo "other script..."
+EOF
+```
+
 
 When done, a client can shut down the server by sending `shutdown\n`:
 ```
@@ -108,17 +121,22 @@ This will immediately disconnect all connected clients and make the server stop.
 
 On the server side, we get something like:
 ```
-Server listening on TCP port 4455
 0: new client connected
 0: disconnected
-0: authentication OK by test.cert
-0: bash script started (pid=4208)
+0: number of bytes received: 170
+0: authentication OK by ../test/test.cert
+0: bash script started (pid=22961)
 0: all bytes sent to child's stdin
 0: output: the quick brown fox
-0: child terminated (pid=4208) ok
+0: child terminated (pid=22961) ok
 1: new client connected
 1: disconnected
-1: shutdown requested
+1: number of bytes received: 42
+1: authentication FAILED: verification failed
+2: new client connected
+2: disconnected
+2: number of bytes received: 9
+2: shutdown requested
 exiting
 ```
 
@@ -149,6 +167,12 @@ The first line of the script must have the following format:
 - ending LF character (`\n`), that marks the end of the signature line
 
 All following bytes are the payload, and taken into account for computing the signature.
+
+Example:
+```
+# 304502206e0b9a8542d60c67128f90dd1fdb4965c5e452b5a9e229dd87c19eb18ca88613022100c3ba34de28298536485567724783055b5f58bb5b841296bc643343b315a4a383
+echo "the quick brown fox"
+```
 
 
 ## License
